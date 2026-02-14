@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx next build:*)",
+      "Bash(npx convex dev:*)",
+      "Bash(git checkout:*)"
+    ]
+  }
+}

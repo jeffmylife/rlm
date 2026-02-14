@@ -1,0 +1,48 @@
+{
+  "name": "rlm-aisdk",
+  "version": "0.1.0",
+  "description": "Minimal Recursive Language Model harness built on AI SDK with a uv-powered Python REPL worker.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "python"
+  ],
+  "scripts": {
+    "dev": "next dev",
+    "build": "npm run build:lib && npm run build:web",
+    "build:lib": "tsc -p tsconfig.json",
+    "build:web": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "convex:dev": "npx convex dev",
+    "convex:deploy": "npx convex deploy",
+    "demo": "tsx src/cli.ts",
+    "sandbox:runner": "tsx sandbox/runner.ts",
+    "test": "tsx --test test/**/*.test.ts"
+  },
+  "keywords": [
+    "rlm",
+    "ai-sdk",
+    "repl"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.26",
+    "@vercel/sandbox": "^1.5.0",
+    "ai": "^6.0.78",
+    "convex": "^1.31.7",
+    "dotenv": "^17.2.4",
+    "next": "^16.1.6",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

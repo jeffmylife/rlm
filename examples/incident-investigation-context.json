@@ -1,0 +1,74 @@
+{
+  "incident_id": "INC-2041",
+  "service": "payment-ledger",
+  "time_window_utc": "2026-02-11T00:00:00Z to 2026-02-11T04:00:00Z",
+  "known_facts": [
+    "A deploy (release-58.4.1) completed at 01:12 UTC.",
+    "Error rate crossed 5% at 01:19 UTC.",
+    "Rollback started at 01:46 UTC and finished at 01:52 UTC.",
+    "After rollback, error rate dropped but remained above baseline until 03:10 UTC."
+  ],
+  "metrics": [
+    { "minute": "01:10", "error_rate": 0.7, "p95_ms": 240, "db_conn_pct": 58, "queue_depth": 22 },
+    { "minute": "01:18", "error_rate": 2.1, "p95_ms": 390, "db_conn_pct": 71, "queue_depth": 40 },
+    { "minute": "01:20", "error_rate": 6.4, "p95_ms": 890, "db_conn_pct": 92, "queue_depth": 125 },
+    { "minute": "01:28", "error_rate": 7.8, "p95_ms": 1320, "db_conn_pct": 97, "queue_depth": 244 },
+    { "minute": "01:45", "error_rate": 8.1, "p95_ms": 1480, "db_conn_pct": 99, "queue_depth": 301 },
+    { "minute": "02:00", "error_rate": 3.9, "p95_ms": 730, "db_conn_pct": 85, "queue_depth": 177 },
+    { "minute": "02:40", "error_rate": 2.8, "p95_ms": 620, "db_conn_pct": 82, "queue_depth": 166 },
+    { "minute": "03:10", "error_rate": 0.9, "p95_ms": 280, "db_conn_pct": 61, "queue_depth": 34 }
+  ],
+  "logs": [
+    "01:13:11 app[api] INFO feature flag `ledger_bulk_commit` enabled for 100%",
+    "01:18:49 db-proxy WARN pool saturation approaching hard limit",
+    "01:20:03 app[api] ERROR timeout acquiring db connection (request_id=aa91)",
+    "01:20:05 app[worker] ERROR timeout acquiring db connection (job_id=bb17)",
+    "01:27:10 app[api] WARN retry storm detected for endpoint /v1/settle",
+    "01:31:44 cache INFO eviction spike in region us-east-1a",
+    "01:43:18 db-proxy ERROR connection pool exhausted",
+    "01:47:03 deploy INFO rollback release-58.4.1 initiated",
+    "02:12:33 app[worker] WARN backlog draining slower than expected",
+    "02:51:02 app[api] INFO queue depth normalized",
+    "03:09:50 db-proxy INFO pool utilization returned to baseline"
+  ],
+  "change_events": [
+    {
+      "id": "chg-1",
+      "at": "01:12",
+      "type": "deploy",
+      "details": "release-58.4.1 introduced larger transaction batch size from 50 to 500"
+    },
+    {
+      "id": "chg-2",
+      "at": "01:13",
+      "type": "feature_flag",
+      "details": "ledger_bulk_commit toggled from 0% to 100%"
+    },
+    {
+      "id": "chg-3",
+      "at": "01:40",
+      "type": "infra",
+      "details": "cache node replacement in us-east-1a"
+    }
+  ],
+  "candidate_root_causes": [
+    "Database connection pool exhaustion driven by larger batch writes.",
+    "Cache instability in one AZ causing widespread retries.",
+    "Upstream gateway outage causing request amplification.",
+    "Background worker deadlock unrelated to deploy."
+  ],
+  "deliverable_format": {
+    "sections": [
+      "Timeline",
+      "Most likely root cause",
+      "Contributing factors",
+      "Disproved hypotheses",
+      "Action items"
+    ],
+    "must_include": [
+      "evidence bullets with timestamps",
+      "confidence score 0-1",
+      "what rollback fixed vs what it did not"
+    ]
+  }
+}
