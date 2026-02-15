@@ -13,7 +13,7 @@ export default defineSchema({
   }).index("by_createdAt", ["createdAt"]),
 
   runs: defineTable({
-    documentId: v.id("documents"),
+    documentId: v.optional(v.id("documents")),
     question: v.string(),
     status: v.union(
       v.literal("queued"),
@@ -50,7 +50,7 @@ export default defineSchema({
 
   run_artifacts: defineTable({
     runId: v.id("runs"),
-    kind: v.union(v.literal("notebook"), v.literal("trace_json"), v.literal("stderr_log")),
+    kind: v.union(v.literal("trace_json"), v.literal("stderr_log")),
     storageId: v.id("_storage"),
     createdAt: v.number(),
   }).index("by_runId", ["runId"]),

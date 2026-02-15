@@ -8,7 +8,7 @@ import { ConvexError, v } from "convex/values";
 
 import { internal } from "./_generated/api";
 import { internalAction } from "./_generated/server";
-import { runRlmInSandbox } from "../sandbox/runner.js";
+import { SANDBOX_CODE_VERSION, runRlmInSandbox } from "../sandbox/runner.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_SANDBOX_TIMEOUT_MS = 8 * 60 * 1000;
@@ -17,6 +17,7 @@ export const execute = internalAction({
   args: {
     runId: v.id("runs"),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const startedAt = Date.now();
     let nextSeq = 1;
@@ -40,8 +41,8 @@ export const execute = internalAction({
     };
 
     const runBundle = await ctx.runQuery(internal.runs.getForExecution, { runId: args.runId });
-    if (!runBundle || !runBundle.run || !runBundle.document) {
-      throw new ConvexError("Run or document not found for execution.");
+    if (!runBundle || !runBundle.run) {
+      throw new ConvexError("Run not found for execution.");
     }
 
     const { run, document } = runBundle;
@@ -50,7 +51,7 @@ export const execute = internalAction({
       summary: "Run executor started",
       payload: {
         runId: args.runId,
-        documentId: run.documentId,
+        documentId: run.documentId ?? null,
       },
     });
     await ctx.runMutation(internal.runs.markRunning, {
@@ -67,29 +68,30 @@ export const execute = internalAction({
       },
     });
 
-    const storageUrl = await ctx.storage.getUrl(document.storageId);
-    await appendEvent({
-      kind: "storage.url.resolved",
-      summary: "Resolved storage URL",
-      payload: {
-        hasUrl: Boolean(storageUrl),
-      },
-    });
-    if (!storageUrl) {
-      await ctx.runMutation(internal.runs.markFailed, {
-        runId: args.runId,
-        endedAt: Date.now(),
-        durationMs: Date.now() - startedAt,
-        errorCode: "document_unavailable",
-        errorMessage: "Document file was not available in storage.",
-      });
-      return;
-    }
-
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "rlm-run-"));
-    const contextPath = path.join(tempDir, "context.txt");
+    let contextPath: string | undefined;
 
-    try {
+    if (document) {
+      const storageUrl = await ctx.storage.getUrl(document.storageId);
+      await appendEvent({
+        kind: "storage.url.resolved",
+        summary: "Resolved storage URL",
+        payload: {
+          hasUrl: Boolean(storageUrl),
+        },
+      });
+      if (!storageUrl) {
+        await ctx.runMutation(internal.runs.markFailed, {
+          runId: args.runId,
+          endedAt: Date.now(),
+          durationMs: Date.now() - startedAt,
+          errorCode: "document_unavailable",
+          errorMessage: "Document file was not available in storage.",
+        });
+        return;
+      }
+
+      contextPath = path.join(tempDir, "context.txt");
       await appendEvent({
         kind: "storage.download.started",
         summary: "Downloading context file",
@@ -107,12 +109,24 @@ export const execute = internalAction({
           bytes: buffer.length,
         },
       });
+    } else {
+      await appendEvent({
+        kind: "storage.skipped",
+        summary: "No document attached, skipping file download",
+      });
+    }
+
+    try {
+      const snapshotId = await ctx.runQuery(internal.sandboxSnapshot.getActiveSnapshotId, {
+        codeVersion: SANDBOX_CODE_VERSION,
+      });
 
       await appendEvent({
         kind: "sandbox.run.started",
         summary: "Invoking sandbox runner",
         payload: {
           backend: process.env.RLM_SANDBOX_BACKEND ?? "local",
+          hasSnapshot: Boolean(snapshotId),
         },
       });
       const result = await withTimeout(
@@ -124,7 +138,7 @@ export const execute = internalAction({
           maxSubcalls: run.maxSubcalls,
           requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
           sandboxTimeoutMs: DEFAULT_SANDBOX_TIMEOUT_MS,
-          notebookTitle: `RLM Run ${args.runId}`,
+          snapshotId: snapshotId ?? undefined,
           onEvent: async (event) => {
             await appendEvent({
               kind: event.kind,
@@ -146,20 +160,15 @@ export const execute = internalAction({
         },
       });
 
-      if (result.notebook) {
-        const notebookStorageId = await ctx.storage.store(
-          new Blob([result.notebook], { type: "application/x-ipynb+json" }),
-        );
-        await ctx.runMutation(internal.runs.addArtifact, {
-          runId: args.runId,
-          kind: "notebook",
-          storageId: notebookStorageId,
-          createdAt: Date.now(),
+      if (result.newSnapshotId) {
+        await ctx.runMutation(internal.sandboxSnapshot.setActiveSnapshotId, {
+          snapshotId: result.newSnapshotId,
+          codeVersion: result.codeVersion,
         });
         await appendEvent({
-          kind: "artifact.saved",
-          summary: "Notebook artifact saved",
-          payload: { kind: "notebook" },
+          kind: "sandbox.snapshot.stored",
+          summary: "Sandbox snapshot stored for future reuse",
+          payload: { snapshotId: result.newSnapshotId },
         });
       }
 

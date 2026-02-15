@@ -38,7 +38,7 @@ export interface RLMHarnessOptions {
 export interface RLMCompletionInput {
   context: RLMContext;
   contextFilePath?: string;
-  rootPrompt?: string;
+  question?: string;
   maxIterations?: number;
 }
 
@@ -70,15 +70,16 @@ interface ModelCallResult {
 const DEFAULT_SYSTEM_PROMPT = [
   "You are an RLM root model operating over a Python REPL environment.",
   "The REPL has:",
-  "1) a `context` variable with the full user input",
-  "2) `llm_query(prompt, model=None)` for recursive LM calls",
-  "3) `llm_query_batched(prompts, model=None)` for concurrent recursive calls",
-  "4) `SHOW_VARS()` to inspect available variables",
-  "5) `FINAL_VAR(name)` to return an existing variable",
+  "1) a `question` variable with the user's request",
+  "2) optionally a `context` variable with loaded data (file contents, etc.)",
+  "3) `llm_query(prompt, model=None)` for recursive LM calls",
+  "4) `llm_query_batched(prompts, model=None)` for concurrent recursive calls",
+  "5) `SHOW_VARS()` to inspect available variables",
+  "6) `FINAL_VAR(name)` to return an existing variable",
   "",
   "When executing Python, wrap code in triple backticks using `repl`, for example:",
   "```repl",
-  "print(type(context))",
+  "print(question)",
   "```",
   "",
   "When done, you MUST end with exactly one of:",
@@ -155,7 +156,7 @@ export class RLMHarness {
           subcallLimit: this.maxTotalSubcalls,
           requestTimeoutMs: this.requestTimeoutMs,
           maxExecutionOutputChars: this.maxExecutionOutputChars,
-          rootPromptProvided: Boolean(input.rootPrompt?.trim()),
+          rootPromptProvided: Boolean(input.question?.trim()),
           contextMetadata,
           redactionPolicy: this.redactionPolicy,
         })
@@ -179,6 +180,7 @@ export class RLMHarness {
             replExecutionId,
             model: chosenModel,
             promptChars: prompt.length,
+            promptPreview: prompt.slice(0, 500),
           },
         });
 
@@ -223,6 +225,7 @@ export class RLMHarness {
               subcallId,
               latencyMs: response.latencyMs,
               responseChars: response.text.length,
+              responsePreview: response.text.slice(0, 1000),
             },
           });
           this.pushSubcallTrace(trace, {
@@ -299,6 +302,7 @@ export class RLMHarness {
               replExecutionId,
               model: chosenModel,
               promptChars: prompt.length,
+              promptPreview: prompt.slice(0, 500),
               batchIndex: index,
             },
           });
@@ -347,6 +351,7 @@ export class RLMHarness {
                 subcallId,
                 latencyMs: response.latencyMs,
                 responseChars: response.text.length,
+                responsePreview: response.text.slice(0, 1000),
                 batchIndex: index,
               },
             });
@@ -418,6 +423,7 @@ export class RLMHarness {
         context: input.context,
         contextFilePath: input.contextFilePath,
         bridgeUrl: bridge.url,
+        question: input.question,
       });
       await this.emitRuntimeEvent({
         kind: "run.initialized",
@@ -432,7 +438,7 @@ export class RLMHarness {
       const iterations: RLMIterationRecord[] = [];
 
       for (let i = 0; i < iterationLimit; i += 1) {
-        const userPrompt = this.buildTurnPrompt({ rootPrompt: input.rootPrompt, iteration: i });
+        const userPrompt = this.buildTurnPrompt({ iteration: i });
         const messages: ModelMessage[] = [...messageHistory, userPrompt];
         await this.emitRuntimeEvent({
           kind: "root.iteration.started",
@@ -454,6 +460,7 @@ export class RLMHarness {
             iteration: i + 1,
             codeBlocks: codeBlocks.length,
             responseChars: response.length,
+            responsePreview: response.slice(0, 2000),
             latencyMs: rootCall.latencyMs,
             finishReason: rootCall.finishReason ?? null,
           },
@@ -495,6 +502,7 @@ export class RLMHarness {
               iteration: i + 1,
               replExecutionId,
               codeChars: code.length,
+              code: code.slice(0, 2000),
             },
           });
 
@@ -515,8 +523,11 @@ export class RLMHarness {
               iteration: i + 1,
               replExecutionId,
               stdoutChars: result.stdout.length,
+              stdoutPreview: result.stdout.slice(0, 2000),
               stderrChars: result.stderr.length,
+              stderrPreview: result.stderr.slice(0, 2000),
               localsCount: Object.keys(result.locals ?? {}).length,
+              localsKeys: Object.keys(result.locals ?? {}),
               executionTimeSec: result.execution_time,
             },
           });
@@ -713,15 +724,12 @@ export class RLMHarness {
     ];
   }
 
-  private buildTurnPrompt(input: { rootPrompt?: string; iteration: number }): ModelMessage {
-    const base =
-      input.rootPrompt && input.rootPrompt.trim().length > 0
-        ? `Solve this request using the REPL context: ${input.rootPrompt.trim()}`
-        : "Solve the task implied by the context variable using the REPL.";
+  private buildTurnPrompt(input: { iteration: number }): ModelMessage {
+    const base = "Read the `question` variable in the REPL to understand the task. Use the REPL to solve it.";
 
     const firstTurnGuard =
       input.iteration === 0
-        ? "You have not inspected the REPL yet. First action should inspect context."
+        ? "Start by reading the question and context variables in the REPL."
         : "Continue from prior execution outputs.";
 
     return {

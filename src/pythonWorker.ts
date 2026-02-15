@@ -13,6 +13,7 @@ export interface PythonWorkerInitOptions {
   context?: unknown;
   contextFilePath?: string;
   bridgeUrl: string;
+  question?: string;
 }
 
 interface WorkerResponse {
@@ -104,6 +105,7 @@ export class PythonReplWorker {
         context: typed.context,
         context_file_path: typed.contextFilePath,
         bridge_url: typed.bridgeUrl,
+        question: typed.question,
       });
       return;
     }

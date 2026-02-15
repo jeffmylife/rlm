@@ -13,6 +13,7 @@ import type * as files from "../files.js";
 import type * as runEvents from "../runEvents.js";
 import type * as runExecutor from "../runExecutor.js";
 import type * as runs from "../runs.js";
+import type * as sandboxSnapshot from "../sandboxSnapshot.js";
 
 import type {
   ApiFromModules,
@@ -26,6 +27,7 @@ declare const fullApi: ApiFromModules<{
   runEvents: typeof runEvents;
   runExecutor: typeof runExecutor;
   runs: typeof runs;
+  sandboxSnapshot: typeof sandboxSnapshot;
 }>;
 
 /**

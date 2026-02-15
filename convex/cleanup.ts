@@ -14,8 +14,16 @@ interface PruneResult {
   cutoff: number;
 }
 
+const pruneResultValidator = v.object({
+  deletedRuns: v.number(),
+  deletedDocuments: v.number(),
+  retentionDays: v.number(),
+  cutoff: v.number(),
+});
+
 export const runNow = action({
   args: {},
+  returns: pruneResultValidator,
   handler: async (ctx): Promise<PruneResult> => {
     return ctx.runAction(internal.cleanup.pruneExpired, {
       retentionDays: DEFAULT_RETENTION_DAYS,
@@ -25,6 +33,7 @@ export const runNow = action({
 
 export const scheduleDaily = mutation({
   args: {},
+  returns: v.object({ scheduled: v.boolean() }),
   handler: async (ctx): Promise<{ scheduled: boolean }> => {
     await ctx.scheduler.runAfter(DAY_MS, internal.cleanup.pruneAndReschedule, {
       retentionDays: DEFAULT_RETENTION_DAYS,
@@ -37,6 +46,7 @@ export const pruneAndReschedule = internalAction({
   args: {
     retentionDays: v.optional(v.number()),
   },
+  returns: pruneResultValidator,
   handler: async (ctx, args): Promise<PruneResult> => {
     const result = (await ctx.runAction(internal.cleanup.pruneExpired, {
       retentionDays: args.retentionDays ?? DEFAULT_RETENTION_DAYS,
@@ -52,6 +62,7 @@ export const pruneExpired = internalAction({
   args: {
     retentionDays: v.optional(v.number()),
   },
+  returns: pruneResultValidator,
   handler: async (ctx, args): Promise<PruneResult> => {
     const retentionDays = Math.max(1, args.retentionDays ?? DEFAULT_RETENTION_DAYS);
     const cutoff = Date.now() - retentionDays * DAY_MS;
@@ -81,6 +92,7 @@ export const listExpiredRunIds = internalQuery({
   args: {
     cutoff: v.number(),
   },
+  returns: v.array(v.id("runs")),
   handler: async (ctx, args) => {
     const runs = await ctx.db
       .query("runs")
@@ -94,6 +106,7 @@ export const listExpiredDocumentIds = internalQuery({
   args: {
     cutoff: v.number(),
   },
+  returns: v.array(v.id("documents")),
   handler: async (ctx, args) => {
     const documents = await ctx.db
       .query("documents")
@@ -107,6 +120,7 @@ export const deleteRunCascade = internalMutation({
   args: {
     runId: v.id("runs"),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
     if (!run) {
@@ -138,6 +152,7 @@ export const deleteDocumentIfUnused = internalMutation({
   args: {
     documentId: v.id("documents"),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const document = await ctx.db.get(args.documentId);
     if (!document) {

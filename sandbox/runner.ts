@@ -5,38 +5,43 @@ import { fileURLToPath } from "node:url";
 import { Sandbox } from "@vercel/sandbox";
 
 import { RLMHarness } from "../src/harness.js";
-import { renderRunTraceNotebook } from "../src/logging/notebookRenderer.js";
 import type { RLMRuntimeEvent, RunTrace } from "../src/logging/traceTypes.js";
 
 export interface SandboxRunInput {
-  contextFilePath: string;
+  contextFilePath?: string;
   question: string;
   model: string;
   maxIterations: number;
   maxSubcalls: number;
   requestTimeoutMs: number;
   sandboxTimeoutMs: number;
-  notebookTitle?: string;
+  snapshotId?: string;
   onEvent?: (event: RLMRuntimeEvent) => void | Promise<void>;
 }
 
 export interface SandboxRunResult {
   answer: string;
   trace: RunTrace | null;
-  notebook: string | null;
   stderr: string | null;
   sandboxId: string | null;
   backend: "local" | "vercel";
+  newSnapshotId?: string;
+  codeVersion?: string;
 }
 
 interface SandboxWorkerResult {
   answer: string;
   trace: RunTrace | null;
-  notebook: string | null;
 }
 
-const SANDBOX_WORKSPACE = "/vercel/sandbox/project";
-const SANDBOX_CONTEXT_PATH = `${SANDBOX_WORKSPACE}/.tmp/context.txt`;
+const SANDBOX_WORKSPACE_PROJECT = "/vercel/sandbox/project";
+const SANDBOX_WORKSPACE_ROOT = "/vercel/sandbox";
+const SANDBOX_CONTEXT_PATH_PROJECT = `${SANDBOX_WORKSPACE_PROJECT}/.tmp/context.txt`;
+const SANDBOX_CONTEXT_PATH_ROOT = `${SANDBOX_WORKSPACE_ROOT}/.tmp/context.txt`;
+
+// Bump this when sandbox worker code changes to invalidate cached snapshots.
+// Snapshots bake in the source code — if the code changes, the snapshot is stale.
+export const SANDBOX_CODE_VERSION = "2";
 
 export async function runRlmInSandbox(input: SandboxRunInput): Promise<SandboxRunResult> {
   const backend = (process.env.RLM_SANDBOX_BACKEND ?? "local").toLowerCase();
@@ -47,6 +52,13 @@ export async function runRlmInSandbox(input: SandboxRunInput): Promise<SandboxRu
 }
 
 async function runLocally(input: SandboxRunInput): Promise<SandboxRunResult> {
+  await input.onEvent?.({
+    ts: Date.now(),
+    kind: "sandbox.local.starting",
+    summary: "Starting local sandbox",
+    payload: {},
+  });
+
   const result = await runHarness({
     contextFilePath: input.contextFilePath,
     question: input.question,
@@ -54,7 +66,6 @@ async function runLocally(input: SandboxRunInput): Promise<SandboxRunResult> {
     maxIterations: input.maxIterations,
     maxSubcalls: input.maxSubcalls,
     requestTimeoutMs: input.requestTimeoutMs,
-    notebookTitle: input.notebookTitle,
     onEvent: input.onEvent,
   });
 
@@ -67,96 +78,242 @@ async function runLocally(input: SandboxRunInput): Promise<SandboxRunResult> {
 }
 
 async function runViaVercelSandbox(input: SandboxRunInput): Promise<SandboxRunResult> {
-  const sourceSnapshotId = process.env.RLM_SANDBOX_SNAPSHOT_ID?.trim();
-  const sandbox = await Sandbox.create(
-    sourceSnapshotId
-      ? {
-          source: {
-            type: "snapshot",
-            snapshotId: sourceSnapshotId,
-          },
-          timeout: input.sandboxTimeoutMs,
-          runtime: "node24",
-        }
-      : {
-          timeout: input.sandboxTimeoutMs,
-          runtime: "node24",
-        },
-  );
+  const gitUrl = process.env.RLM_SANDBOX_GIT_URL?.trim();
+  const gitRevision = process.env.RLM_SANDBOX_GIT_REVISION?.trim();
+  const gitPat = process.env.RLM_SANDBOX_GIT_PAT?.trim();
+
+  const useGitSource = Boolean(gitUrl);
+  const useLocalUpload = !useGitSource;
+
+  // Explicit credentials for non-Vercel runtimes (e.g. Convex).
+  // Falls back to VERCEL_OIDC_TOKEN auto-detection when not set.
+  const vercelToken = process.env.VERCEL_TOKEN?.trim();
+  const vercelTeamId = process.env.VERCEL_TEAM_ID?.trim();
+  const vercelProjectId = process.env.VERCEL_PROJECT_ID?.trim();
+
+  const createOptions: Parameters<typeof Sandbox.create>[0] = {
+    timeout: input.sandboxTimeoutMs,
+    runtime: "node24",
+  };
+
+  if (vercelToken && vercelTeamId && vercelProjectId) {
+    Object.assign(createOptions, {
+      token: vercelToken,
+      teamId: vercelTeamId,
+      projectId: vercelProjectId,
+    });
+  }
+
+  if (gitUrl) {
+    const gitSource: Record<string, string> = {
+      type: "git",
+      url: gitUrl,
+    };
+    if (gitRevision) gitSource.revision = gitRevision;
+    if (gitPat) {
+      gitSource.username = "oauth2";
+      gitSource.password = gitPat;
+    }
+    createOptions.source = gitSource as typeof createOptions.source;
+  }
+
+  // Try snapshot-based creation first
+  let sandbox: Sandbox;
+  let skipNpmInstall = false;
+  let newSnapshotId: string | undefined;
+
+  if (input.snapshotId) {
+    try {
+      await input.onEvent?.({
+        ts: Date.now(),
+        kind: "sandbox.creating",
+        summary: "Creating sandbox from snapshot",
+        payload: { snapshotId: input.snapshotId },
+      });
+      sandbox = await Sandbox.create({
+        ...createOptions,
+        source: { type: "snapshot", snapshotId: input.snapshotId } as unknown as typeof createOptions.source,
+      });
+      skipNpmInstall = true;
+      await input.onEvent?.({
+        ts: Date.now(),
+        kind: "sandbox.created",
+        summary: "Sandbox created from snapshot",
+        payload: { sandboxId: sandbox.sandboxId, fromSnapshot: true },
+      });
+    } catch {
+      // Snapshot failed, fall through to fresh creation
+      await input.onEvent?.({
+        ts: Date.now(),
+        kind: "sandbox.snapshot.failed",
+        summary: "Snapshot creation failed, creating fresh sandbox",
+        payload: { snapshotId: input.snapshotId },
+      });
+      await input.onEvent?.({
+        ts: Date.now(),
+        kind: "sandbox.creating",
+        summary: "Creating fresh Vercel sandbox",
+        payload: { source: useGitSource ? "git" : "local" },
+      });
+      sandbox = await Sandbox.create(createOptions);
+    }
+  } else {
+    await input.onEvent?.({
+      ts: Date.now(),
+      kind: "sandbox.creating",
+      summary: "Creating fresh Vercel sandbox",
+      payload: { source: useGitSource ? "git" : "local" },
+    });
+    sandbox = await Sandbox.create(createOptions);
+  }
+
+  // Git clone puts files at /vercel/sandbox/, local upload uses /vercel/sandbox/project/
+  const workspace = useGitSource ? SANDBOX_WORKSPACE_ROOT : SANDBOX_WORKSPACE_PROJECT;
+  const contextPath = useGitSource ? SANDBOX_CONTEXT_PATH_ROOT : SANDBOX_CONTEXT_PATH_PROJECT;
 
   try {
-    if (sourceSnapshotId) {
-      // Snapshot already has project files + node_modules — only write the context file
-      const contextBuffer = await fs.readFile(input.contextFilePath);
-      await sandbox.writeFiles([
-        { path: SANDBOX_CONTEXT_PATH, content: contextBuffer },
-      ]);
-    } else {
-      // No snapshot — upload entire project and install deps
-      await writeProjectFilesToSandbox(sandbox, input.contextFilePath);
+    if (!skipNpmInstall) {
+      if (useLocalUpload) {
+        await writeProjectFilesToSandbox(sandbox, workspace, input.contextFilePath);
+      } else if (input.contextFilePath) {
+        const contextBuffer = await fs.readFile(input.contextFilePath);
+        await sandbox.writeFiles([
+          { path: contextPath, content: contextBuffer },
+        ]);
+      }
 
+      await input.onEvent?.({
+        ts: Date.now(),
+        kind: "sandbox.npm_install.started",
+        summary: "Running npm install in sandbox",
+        payload: { workspace },
+      });
       const install = await sandbox.runCommand({
         cmd: "npm",
         args: ["install", "--no-audit", "--loglevel", "error"],
-        cwd: SANDBOX_WORKSPACE,
+        cwd: workspace,
       });
       if (install.exitCode !== 0) {
-        throw new Error(`Sandbox npm install failed with exit code ${install.exitCode}.`);
+        const installStderr = await install.stderr();
+        throw new Error(`Sandbox npm install failed (exit ${install.exitCode}): ${(installStderr || "").slice(0, 2000)}`);
+      }
+      await input.onEvent?.({
+        ts: Date.now(),
+        kind: "sandbox.npm_install.completed",
+        summary: "npm install completed",
+        payload: { workspace },
+      });
+
+      await input.onEvent?.({
+        ts: Date.now(),
+        kind: "sandbox.created",
+        summary: "Vercel sandbox created",
+        payload: {
+          sandboxId: sandbox.sandboxId,
+          source: useGitSource ? "git" : "local",
+          workspace,
+        },
+      });
+
+      // Snapshot the sandbox for future reuse (caches node_modules)
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const snapshot = await (sandbox as any).snapshot() as { snapshotId: string };
+        newSnapshotId = snapshot.snapshotId;
+        await input.onEvent?.({
+          ts: Date.now(),
+          kind: "sandbox.snapshot.created",
+          summary: "Sandbox snapshot created for reuse",
+          payload: { snapshotId: newSnapshotId },
+        });
+        // snapshot() stops the sandbox, create a new one from the snapshot
+        sandbox = await Sandbox.create({
+          ...createOptions,
+          source: { type: "snapshot", snapshotId: newSnapshotId } as unknown as typeof createOptions.source,
+        });
+      } catch {
+        // Snapshot failed, continue with existing sandbox (it may still be running)
+        await input.onEvent?.({
+          ts: Date.now(),
+          kind: "sandbox.snapshot.save_failed",
+          summary: "Could not save snapshot, continuing without",
+          payload: {},
+        });
+      }
+    } else {
+      // From snapshot — just write the context file if needed
+      if (input.contextFilePath) {
+        const contextBuffer = await fs.readFile(input.contextFilePath);
+        await sandbox.writeFiles([
+          { path: contextPath, content: contextBuffer },
+        ]);
       }
     }
 
-    await input.onEvent?.({
-      ts: Date.now(),
-      kind: "sandbox.created",
-      summary: "Vercel sandbox created",
-      payload: {
-        sandboxId: sandbox.sandboxId,
-        sourceSnapshotId: sourceSnapshotId ?? null,
-      },
-    });
+    const workerArgs = [
+      "tsx",
+      "sandbox/runner.ts",
+      "--mode",
+      "sandbox-worker",
+      "--question",
+      input.question,
+      "--model",
+      input.model,
+      "--max-iterations",
+      String(input.maxIterations),
+      "--max-subcalls",
+      String(input.maxSubcalls),
+      "--request-timeout-ms",
+      String(input.requestTimeoutMs),
+    ];
+    if (input.contextFilePath) {
+      workerArgs.push("--context-file", contextPath);
+    }
 
     const command = await sandbox.runCommand({
       cmd: "npx",
-      args: [
-        "tsx",
-        "sandbox/runner.ts",
-        "--mode",
-        "sandbox-worker",
-        "--context-file",
-        SANDBOX_CONTEXT_PATH,
-        "--question",
-        input.question,
-        "--model",
-        input.model,
-        "--max-iterations",
-        String(input.maxIterations),
-        "--max-subcalls",
-        String(input.maxSubcalls),
-        "--request-timeout-ms",
-        String(input.requestTimeoutMs),
-      ],
-      cwd: SANDBOX_WORKSPACE,
+      args: workerArgs,
+      cwd: workspace,
       env: buildSandboxEnv(),
     });
 
     const stdout = await command.stdout();
     const stderr = await command.stderr();
-    const workerResult = await parseSandboxWorkerOutput(stdout, input.onEvent);
+
+    if (command.exitCode !== 0) {
+      await input.onEvent?.({
+        ts: Date.now(),
+        kind: "sandbox.worker.failed",
+        summary: `Worker exited with code ${command.exitCode}`,
+        payload: {
+          exitCode: command.exitCode,
+          stderr: (stderr || "").slice(0, 4000),
+          stdout: (stdout || "").slice(0, 2000),
+        },
+      });
+    }
+
+    const workerResult = await parseSandboxWorkerOutput(stdout, stderr, input.onEvent);
 
     return {
       answer: workerResult.answer,
       trace: workerResult.trace,
-      notebook: workerResult.notebook,
       stderr: stderr || null,
       sandboxId: sandbox.sandboxId,
       backend: "vercel",
+      newSnapshotId,
+      codeVersion: SANDBOX_CODE_VERSION,
     };
   } finally {
     await sandbox.stop().catch(() => undefined);
   }
 }
 
-async function writeProjectFilesToSandbox(sandbox: Sandbox, contextFilePath: string): Promise<void> {
+async function writeProjectFilesToSandbox(
+  sandbox: Sandbox,
+  workspace: string,
+  contextFilePath?: string,
+): Promise<void> {
   const repoRoot = process.cwd();
   const entries = await collectProjectFiles(repoRoot, [
     "package.json",
@@ -169,16 +326,18 @@ async function writeProjectFilesToSandbox(sandbox: Sandbox, contextFilePath: str
 
   const files = await Promise.all(
     entries.map(async (entry) => ({
-      path: `${SANDBOX_WORKSPACE}/${entry.relativePath}`,
+      path: `${workspace}/${entry.relativePath}`,
       content: await fs.readFile(entry.absolutePath),
     })),
   );
 
-  const contextBuffer = await fs.readFile(contextFilePath);
-  files.push({
-    path: SANDBOX_CONTEXT_PATH,
-    content: contextBuffer,
-  });
+  if (contextFilePath) {
+    const contextBuffer = await fs.readFile(contextFilePath);
+    files.push({
+      path: `${workspace}/.tmp/context.txt`,
+      content: contextBuffer,
+    });
+  }
 
   await sandbox.writeFiles(files);
 }
@@ -255,6 +414,7 @@ function buildSandboxEnv(): Record<string, string> {
 
 async function parseSandboxWorkerOutput(
   stdout: string,
+  stderr: string,
   onEvent?: (event: RLMRuntimeEvent) => void | Promise<void>,
 ): Promise<SandboxWorkerResult> {
   const lines = stdout.split(/\r?\n/);
@@ -280,24 +440,33 @@ async function parseSandboxWorkerOutput(
   }
 
   if (!result) {
-    throw new Error("Sandbox worker did not emit a final result payload.");
+    const stderrPreview = (stderr || "").trim().slice(0, 2000);
+    const stdoutPreview = (stdout || "").trim().slice(0, 1000);
+    throw new Error(
+      `Sandbox worker did not emit a final result payload.\n` +
+      `stderr: ${stderrPreview || "(empty)"}\n` +
+      `stdout: ${stdoutPreview || "(empty)"}`,
+    );
   }
 
   return result;
 }
 
 async function runHarness(input: {
-  contextFilePath: string;
+  contextFilePath?: string;
   question: string;
   model: string;
   maxIterations: number;
   maxSubcalls: number;
   requestTimeoutMs: number;
-  notebookTitle?: string;
   onEvent?: (event: RLMRuntimeEvent) => void | Promise<void>;
 }): Promise<SandboxWorkerResult> {
   let trace: RunTrace | null = null;
-  const contextStats = await fs.stat(input.contextFilePath);
+  let contextDesc = "[no context file]";
+  if (input.contextFilePath) {
+    const contextStats = await fs.stat(input.contextFilePath);
+    contextDesc = `[context_file size=${contextStats.size} bytes]`;
+  }
   const harness = new RLMHarness({
     rootModel: input.model,
     subModel: input.model,
@@ -313,28 +482,17 @@ async function runHarness(input: {
   });
 
   const result = await harness.completion({
-    context: `[context_file size=${contextStats.size} bytes]`,
+    context: contextDesc,
     contextFilePath: input.contextFilePath,
-    rootPrompt: input.question,
+    question: input.question,
     maxIterations: input.maxIterations,
   });
 
   const finalTrace = result.trace ?? trace;
-  const notebook =
-    finalTrace &&
-    JSON.stringify(
-      renderRunTraceNotebook({
-        trace: finalTrace,
-        title: input.notebookTitle ?? "RLM Run Replay",
-      }),
-      null,
-      2,
-    ) + "\n";
 
   return {
     answer: result.answer,
     trace: finalTrace ?? null,
-    notebook: notebook ?? null,
   };
 }
 
@@ -366,8 +524,8 @@ async function runCli(): Promise<void> {
 
   const contextFilePath = args.get("context-file");
   const question = args.get("question");
-  if (!contextFilePath || !question) {
-    throw new Error("sandbox-worker mode requires --context-file and --question.");
+  if (!question) {
+    throw new Error("sandbox-worker mode requires --question.");
   }
 
   const model = args.get("model") ?? process.env.RLM_ROOT_MODEL ?? "openai/gpt-5-mini";

@@ -45,7 +45,7 @@ async function main(): Promise<void> {
 
   const result = await harness.completion({
     context,
-    rootPrompt: query,
+    question: query,
   });
 
   let notebookPath: string | undefined;

@@ -8,6 +8,7 @@ const SUPPORTED_EXTENSIONS = [".txt", ".md"];
 
 export const generateUploadUrl = mutation({
   args: {},
+  returns: v.string(),
   handler: async (ctx) => {
     return ctx.storage.generateUploadUrl();
   },
@@ -21,6 +22,7 @@ export const commitUpload = mutation({
     mimeType: v.string(),
     sha256: v.string(),
   },
+  returns: v.id("documents"),
   handler: async (ctx, args) => {
     const now = Date.now();
     const normalizedFilename = args.filename.trim();
@@ -68,6 +70,19 @@ export const listRecent = query({
   args: {
     limit: v.optional(v.number()),
   },
+  returns: v.array(
+    v.object({
+      _id: v.id("documents"),
+      _creationTime: v.number(),
+      filename: v.string(),
+      storageId: v.id("_storage"),
+      sizeBytes: v.number(),
+      mimeType: v.union(v.literal("text/plain"), v.literal("text/markdown")),
+      sha256: v.string(),
+      status: v.union(v.literal("ready"), v.literal("invalid"), v.literal("deleted")),
+      createdAt: v.number(),
+    }),
+  ),
   handler: async (ctx, args) => {
     const limit = Math.max(1, Math.min(args.limit ?? 20, 100));
     return ctx.db.query("documents").withIndex("by_createdAt").order("desc").take(limit);
@@ -78,6 +93,20 @@ export const get = query({
   args: {
     documentId: v.id("documents"),
   },
+  returns: v.union(
+    v.object({
+      _id: v.id("documents"),
+      _creationTime: v.number(),
+      filename: v.string(),
+      storageId: v.id("_storage"),
+      sizeBytes: v.number(),
+      mimeType: v.union(v.literal("text/plain"), v.literal("text/markdown")),
+      sha256: v.string(),
+      status: v.union(v.literal("ready"), v.literal("invalid"), v.literal("deleted")),
+      createdAt: v.number(),
+    }),
+    v.null(),
+  ),
   handler: async (ctx, args) => {
     return ctx.db.get(args.documentId);
   },
@@ -87,6 +116,7 @@ export const getStorageUrl = query({
   args: {
     storageId: v.id("_storage"),
   },
+  returns: v.union(v.string(), v.null()),
   handler: async (ctx, args) => {
     return ctx.storage.getUrl(args.storageId);
   },

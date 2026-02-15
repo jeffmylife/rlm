@@ -99,7 +99,7 @@ _SAFE_BUILTINS = {
 
 
 class ReplState:
-    def __init__(self, context_payload: Any, bridge_url: str):
+    def __init__(self, context_payload: Any, bridge_url: str, question: str | None = None):
         self.bridge_url = bridge_url.rstrip("/")
         self.globals: dict[str, Any] = {
             "__builtins__": _SAFE_BUILTINS.copy(),
@@ -111,6 +111,9 @@ class ReplState:
         self.globals["SHOW_VARS"] = self.show_vars
         self.globals["llm_query"] = self.llm_query
         self.globals["llm_query_batched"] = self.llm_query_batched
+
+        if question is not None:
+            self.locals["question"] = question
 
         self.load_context(context_payload)
 
@@ -266,6 +269,7 @@ def main() -> None:
                 state = ReplState(
                     context_payload=request.get("context"),
                     bridge_url=str(request.get("bridge_url", "")),
+                    question=request.get("question"),
                 )
                 context_file_path = request.get("context_file_path")
                 if isinstance(context_file_path, str) and context_file_path.strip():
