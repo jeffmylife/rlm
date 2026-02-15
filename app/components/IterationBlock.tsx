@@ -15,13 +15,13 @@ export function IterationBlock({
   const [open, setOpen] = useState(true);
 
   return (
-    <div className="iteration-block fade-in">
+    <div className={`iteration-block ${isActive ? "active-glow" : ""}`}>
       <div
         className={`iteration-header ${isActive ? "active" : ""}`}
         onClick={() => setOpen(!open)}
       >
         <span className={`iteration-chevron ${open ? "open" : ""}`}>{open ? "\u25BE" : "\u25B8"}</span>
-        <span className="iteration-number">#{iteration.index}</span>
+        <span className="iteration-number">{iteration.index}</span>
         <span className="iteration-summary">
           {iteration.codeBlocks} code block{iteration.codeBlocks !== 1 ? "s" : ""}
           {iteration.replBlocks.reduce((n, b) => n + b.subcalls.length, 0) > 0 &&

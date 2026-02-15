@@ -15,7 +15,15 @@ export function ReplBlock({ block }: { block: ReplBlockNode }) {
           <span className="repl-execution-time"><span className="spinner" style={{ width: 8, height: 8, borderWidth: 1.5, marginRight: 4 }} />running</span>
         )}
       </div>
-      {block.code && <pre className="repl-code">{block.code}</pre>}
+      {block.code && (
+        <pre className="repl-code">
+          <code className="repl-code-lines">
+            {block.code.split("\n").map((line, i) => (
+              <span key={i} className="repl-line">{line}{"\n"}</span>
+            ))}
+          </code>
+        </pre>
+      )}
       {block.status === "started" && (
         <div className="repl-executing">Executing...</div>
       )}

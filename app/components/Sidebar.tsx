@@ -113,7 +113,7 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <h1>&gt;_ RLM Sandbox</h1>
+        <h1>RLM</h1>
         <p>Recursive reasoning engine</p>
       </div>
 

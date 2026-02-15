@@ -36,10 +36,10 @@ export function RunThread({ runId }: { runId: Id<"runs"> }) {
 
   return (
     <div className="run-thread">
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
+      <div className="run-thread-header">
         <StatusBadge status={run.status} />
         {run.durationMs != null && (
-          <span className="dim">{(run.durationMs / 1000).toFixed(1)}s</span>
+          <span className="dim" style={{ fontSize: "0.72rem" }}>{(run.durationMs / 1000).toFixed(1)}s</span>
         )}
       </div>
 

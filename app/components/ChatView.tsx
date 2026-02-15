@@ -10,18 +10,6 @@ import { useAutoScroll } from "../hooks/useAutoScroll";
 import { QuestionInput } from "./QuestionInput";
 import { RunThread } from "./RunThread";
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB"];
-  let size = bytes / 1024;
-  let unit = units[0];
-  for (let i = 1; i < units.length && size >= 1024; i++) {
-    size /= 1024;
-    unit = units[i];
-  }
-  return `${size.toFixed(1)} ${unit}`;
-}
-
 export function ChatView({
   selectedDocId,
   activeRunId,
@@ -36,11 +24,6 @@ export function ChatView({
   const [starting, setStarting] = useState(false);
   const startRun = useMutation(api.runs.start);
   const cancelRun = useMutation(api.runs.cancel);
-
-  const doc = useQuery(
-    api.files.get,
-    selectedDocId ? { documentId: selectedDocId } : "skip",
-  ) as { _id: Id<"documents">; filename: string; sizeBytes: number } | null | undefined;
 
   const activeRun = useQuery(
     api.runs.get,
@@ -78,18 +61,11 @@ export function ChatView({
 
   return (
     <div className="chat-view">
-      {doc && (
-        <div className="chat-header">
-          <span className="chat-header-filename">{doc.filename}</span>
-          <span className="chat-header-meta">{formatBytes(doc.sizeBytes)}</span>
-        </div>
-      )}
-
       <div className="chat-scroll" ref={scrollRef}>
         {activeRun ? (
           <div>
             <div className="question-bubble">
-              <div className="question-label">Question</div>
+              <div className="question-label">You</div>
               {activeRun.question}
             </div>
             <div style={{ marginTop: "0.75rem" }}>
@@ -97,8 +73,10 @@ export function ChatView({
             </div>
           </div>
         ) : (
-          <div className="dim" style={{ textAlign: "center", padding: "2rem" }}>
-            Start a new thread by asking a question below.
+          <div className="empty-state">
+            <div className="empty-state-icon">&gt;_</div>
+            <h2>Ask anything</h2>
+            <p>Submit a question to start a reasoning thread</p>
           </div>
         )}
       </div>

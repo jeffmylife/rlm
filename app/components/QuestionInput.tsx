@@ -32,7 +32,7 @@ export function QuestionInput({
   return (
     <div className="input-bar">
       <textarea
-        placeholder={disabled ? "Select a document first..." : "Ask a question about this document..."}
+        placeholder="Ask a question..."
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
